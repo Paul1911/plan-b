@@ -81,17 +81,22 @@ def main():
         orchestrator = Orchestrator(enable_tidal=enable_tidal, enable_spotify=enable_spotify)
         summary = orchestrator.run()
 
-        print(f"\nDone! {summary['songs_unique']} unique songs scraped.")
+        print(f"\nDone!")
+        print(f"  Songs found:   {summary['songs_scraped']} (scraped), {summary['songs_unique']} unique")
         if enable_tidal:
             print(
-                f"Tidal: {summary['tidal_matched']} matched, "
-                f"{summary['tidal_unmatched']} unmatched"
+                f"  Tidal:         {summary['tidal_matched']} added to playlist, "
+                f"{summary['tidal_unmatched']} not found"
             )
         if enable_spotify:
             print(
-                f"Spotify: {summary['spotify_matched']} matched, "
-                f"{summary['spotify_unmatched']} unmatched"
+                f"  Spotify:       {summary['spotify_matched']} added to playlist, "
+                f"{summary['spotify_unmatched']} not found"
             )
+        if summary["unmatched_songs"]:
+            print(f"\n  Songs not found on streaming services:")
+            for s in summary["unmatched_songs"]:
+                print(f"    - {s}")
 
     elif args.command == "schedule":
         from plan_b.scheduler import run_scheduler

@@ -37,21 +37,21 @@ class OnlineRadioBoxScraper(BaseScraper):
         )
 
     def scrape(self) -> list[Song]:
-        """Scrape Plan B songs from the last 7 days."""
-        all_songs = []
-
+        """Scrape Plan B songs from the most recent show only."""
+        # Find the most recent day that was a Plan B show (Mon-Thu)
         for day_offset in range(7):
             target_date = datetime.now() - timedelta(days=day_offset)
-
-            # Only scrape Mon(0) through Thu(3)
             if target_date.weekday() not in Config.PLAN_B_WEEKDAYS:
                 continue
 
             songs = self._scrape_day(day_offset, target_date)
-            all_songs.extend(songs)
+            if songs:
+                day_name = target_date.strftime("%A %Y-%m-%d")
+                logger.info(f"OnlineRadioBox: {len(songs)} songs from latest show ({day_name})")
+                return songs
 
-        logger.info(f"OnlineRadioBox total: {len(all_songs)} Plan B songs from last 7 days")
-        return all_songs
+        logger.warning("OnlineRadioBox: no Plan B songs found in the last 7 days")
+        return []
 
     def _scrape_day(self, day_offset: int, target_date: datetime) -> list[Song]:
         """Scrape a single day and filter to Plan B time window."""
