@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plan-b"
+version = "0.1.0"
+description = "Scrape 1LIVE Plan B songs and create Tidal/Spotify playlists"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "tidalapi>=0.7.0",
+    "spotipy>=2.23.0",
+    "thefuzz[speedup]>=0.20.0",
+    "python-dotenv>=1.0.0",
+    "schedule>=1.2.0",
+]
+
+[project.scripts]
+plan-b = "plan_b.__main__:main"

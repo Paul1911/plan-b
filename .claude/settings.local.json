@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www1.wdr.de)",
+      "WebFetch(domain:onlineradiobox.com)"
+    ]
+  }
+}
