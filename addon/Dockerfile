@@ -1,8 +1,8 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install Python, uv, and git
-RUN apk add --no-cache python3 curl git \
+# Install git and uv (Python is already in the base image)
+RUN apk add --no-cache curl git \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 

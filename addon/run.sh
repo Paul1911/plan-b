@@ -1,23 +1,23 @@
-#!/usr/bin/with-contenv bashio
+#!/bin/sh
 
-# Read options from Home Assistant add-on config
-SCHEDULE_TIME=$(bashio::config 'schedule_time')
-SPOTIFY_ENABLED=$(bashio::config 'spotify_enabled')
+# Read options from Home Assistant add-on config (/data/options.json)
+CONFIG="/data/options.json"
+SCHEDULE_TIME=$(python3 -c "import json; print(json.load(open('${CONFIG}'))['schedule_time'])")
 
-# Store Tidal session and Spotify cache in /data (persistent across restarts)
+# Store Tidal session in /data (persistent across restarts)
 export TIDAL_SESSION_FILE="/data/.tidal_session.json"
 
-# Pass Spotify credentials as environment variables if enabled
-if bashio::config.true 'spotify_enabled'; then
-    export SPOTIFY_CLIENT_ID=$(bashio::config 'spotify_client_id')
-    export SPOTIFY_CLIENT_SECRET=$(bashio::config 'spotify_client_secret')
+# Check Spotify config
+SPOTIFY_ENABLED=$(python3 -c "import json; print(json.load(open('${CONFIG}'))['spotify_enabled'])")
+SPOTIFY_FLAG=""
+if [ "$SPOTIFY_ENABLED" = "True" ]; then
+    export SPOTIFY_CLIENT_ID=$(python3 -c "import json; print(json.load(open('${CONFIG}'))['spotify_client_id'])")
+    export SPOTIFY_CLIENT_SECRET=$(python3 -c "import json; print(json.load(open('${CONFIG}'))['spotify_client_secret'])")
     export SPOTIFY_REDIRECT_URI="http://localhost:8888/callback"
     SPOTIFY_FLAG="--spotify"
-else
-    SPOTIFY_FLAG=""
 fi
 
-bashio::log.info "Starting 1Live Plan B scheduler at ${SCHEDULE_TIME} (Tue-Fri)"
+echo "Starting 1Live Plan B scheduler at ${SCHEDULE_TIME} (Tue-Fri)"
 
 cd /app
 exec python3 -m plan_b schedule \
