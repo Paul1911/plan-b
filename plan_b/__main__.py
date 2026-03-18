@@ -36,7 +36,14 @@ def main():
     sched_parser.add_argument(
         "--time",
         default=Config.SCHEDULE_TIME,
-        help=f"Time to run daily in HH:MM format (default: {Config.SCHEDULE_TIME})",
+        help=f"Time to run in HH:MM format (default: {Config.SCHEDULE_TIME})",
+    )
+    sched_parser.add_argument(
+        "--days",
+        nargs="+",
+        default=["tuesday", "wednesday", "thursday", "friday"],
+        metavar="DAY",
+        help="Weekdays to run on (default: tuesday wednesday thursday friday)",
     )
     sched_parser.add_argument(
         "--tidal",
@@ -103,6 +110,7 @@ def main():
 
         run_scheduler(
             time_str=args.time,
+            days=args.days,
             enable_tidal=enable_tidal,
             enable_spotify=enable_spotify,
         )
