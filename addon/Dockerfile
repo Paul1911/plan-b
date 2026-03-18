@@ -1,20 +1,18 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install Python and uv
-RUN apk add --no-cache python3 curl \
+# Install Python, uv, and git
+RUN apk add --no-cache python3 curl git \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-# Copy project files
+# Clone repo and install dependencies
 WORKDIR /app
-COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
-
-COPY plan_b/ ./plan_b/
+RUN git clone --depth 1 https://github.com/Paul1911/plan-b.git . \
+    && uv pip install --system --no-cache -r requirements.txt
 
 # Copy add-on run script
-COPY addon/run.sh /run.sh
+COPY run.sh /run.sh
 RUN chmod +x /run.sh
 
 CMD ["/run.sh"]
