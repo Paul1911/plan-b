@@ -21,21 +21,15 @@ class Config:
 
     # Tidal
     TIDAL_SESSION_FILE: str = os.getenv("TIDAL_SESSION_FILE", ".tidal_session.json")
-
-    # Scraping - WDR
-    WDR_PLAN_B_CHANNEL_URL: str = (
-        "https://www1.wdr.de/radio/1live/musik/1live-streams/"
-        "plan-b-channel-playlist-100.html"
-    )
-    WDR_PLAN_B_SHOW_URLS: dict = {
-        "monday": "https://www1.wdr.de/radio/1live/musik/1live-plan-b/plan-b-montagssendung-100.html",
-        "tuesday": "https://www1.wdr.de/radio/1live/musik/1live-plan-b/plan-b-dienstagssendung-100.html",
-        "wednesday": "https://www1.wdr.de/radio/1live/musik/1live-plan-b/plan-b-mittwochssendung-100.html",
-        "thursday": "https://www1.wdr.de/radio/1live/musik/1live-plan-b/plan-b-donnerstagssendung-100.html",
-    }
+    # Full session JSON (contents of the session file) for headless/CI use,
+    # e.g. a GitHub Actions secret. Takes precedence over the session file.
+    TIDAL_SESSION_JSON: str = os.getenv("TIDAL_SESSION_JSON", "")
 
     # Scraping - OnlineRadioBox
     ONLINERADIOBOX_URL: str = "https://onlineradiobox.com/de/einslive/playlist/"
+
+    # Timezone the radio station broadcasts in (playlist times are local Berlin time)
+    TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Berlin")
 
     # Plan B time window (on main 1LIVE channel)
     PLAN_B_START_HOUR: int = 20  # 20:00

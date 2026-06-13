@@ -1,0 +1,43 @@
+name: Update Plan B playlist
+
+on:
+  schedule:
+    # Mon-Thu, after each Plan B show (the show ends 23:00 Berlin).
+    # GitHub cron is UTC with no DST. 22:30 UTC is safely after 23:00 Berlin in
+    # BOTH seasons: 23:30 Berlin in winter (CET) and 00:30 Berlin in summer (CEST).
+    # The scraper always grabs the most recent completed show, so the exact local
+    # minute doesn't matter - this needs no seasonal changes.
+    - cron: "30 22 * * 1-4"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Scrape & match but do not modify the playlist"
+        type: boolean
+        default: false
+
+# Never let two runs touch the playlist at once.
+concurrency:
+  group: plan-b
+  cancel-in-progress: false
+
+jobs:
+  update-playlist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          # Contents of .tidal_session.json from `python -m plan_b login`.
+          TIDAL_SESSION_JSON: ${{ secrets.TIDAL_SESSION_JSON }}
+        run: >-
+          python -m plan_b run
+          ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}

@@ -22,6 +22,7 @@ def run_scheduler(
     days: list[str] | None = None,
     enable_tidal: bool = True,
     enable_spotify: bool = False,
+    run_on_start: bool = False,
 ):
     """Run the pipeline on a schedule.
 
@@ -31,6 +32,9 @@ def run_scheduler(
               If None or empty, runs every day.
         enable_tidal: Update Tidal playlist.
         enable_spotify: Update Spotify playlist.
+        run_on_start: If True, run once immediately on startup. Off by default so
+            container restarts don't trigger spurious (and possibly login-blocking)
+            runs.
     """
     from plan_b.orchestrator import Orchestrator
 
@@ -59,8 +63,9 @@ def run_scheduler(
 
     logger.info("Press Ctrl+C to stop.")
 
-    # Run once immediately on start
-    job()
+    if run_on_start:
+        logger.info("Running once now (run_on_start=True)...")
+        job()
 
     try:
         while True:

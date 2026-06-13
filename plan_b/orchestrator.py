@@ -4,7 +4,6 @@ from datetime import datetime
 from plan_b.config import Config
 from plan_b.models import Song
 from plan_b.scrapers.onlineradiobox import OnlineRadioBoxScraper
-from plan_b.scrapers.wdr import WDRScraper
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +11,16 @@ logger = logging.getLogger(__name__)
 class Orchestrator:
     """Coordinates the full scrape -> match -> update workflow."""
 
-    def __init__(self, enable_tidal: bool = True, enable_spotify: bool = False):
+    def __init__(
+        self,
+        enable_tidal: bool = True,
+        enable_spotify: bool = False,
+        dry_run: bool = False,
+        fetcher=None,
+    ):
+        self.dry_run = dry_run
         self.scrapers = [
-            OnlineRadioBoxScraper(),  # Primary: time-filtered Plan B songs
-            WDRScraper(),  # Secondary: WDR show pages
+            OnlineRadioBoxScraper(fetcher=fetcher),  # time-filtered Plan B songs
         ]
         self.tidal = None
         self.spotify = None
@@ -36,18 +41,32 @@ class Orchestrator:
 
                 self.spotify = SpotifyService()
 
+    def collect_songs(self) -> tuple[list[Song], list[Song]]:
+        """Scrape all sources and deduplicate. Returns (all_songs, unique_songs)."""
+        logger.info("=" * 60)
+        logger.info("Step 1: Scraping songs from all sources")
+        logger.info("=" * 60)
+        all_songs = self._scrape_all_sources()
+
+        logger.info("")
+        logger.info("Step 2: Deduplicating")
+        unique_songs = list(dict.fromkeys(all_songs))
+        logger.info(f"  {len(all_songs)} scraped -> {len(unique_songs)} unique songs")
+        return all_songs, unique_songs
+
     def run(self) -> dict:
         """
         Execute the full pipeline:
         1. Scrape songs from all sources
         2. Deduplicate
         3. Match to Tidal and/or Spotify
-        4. Update playlists
+        4. Update playlists (skipped in dry-run)
 
         Returns a summary dict.
         """
         summary = {
             "timestamp": datetime.now().isoformat(),
+            "dry_run": self.dry_run,
             "songs_scraped": 0,
             "songs_unique": 0,
             "tidal_matched": 0,
@@ -57,19 +76,9 @@ class Orchestrator:
             "unmatched_songs": [],
         }
 
-        # Step 1: Scrape
-        logger.info("=" * 60)
-        logger.info("Step 1: Scraping songs from all sources")
-        logger.info("=" * 60)
-        all_songs = self._scrape_all_sources()
+        all_songs, unique_songs = self.collect_songs()
         summary["songs_scraped"] = len(all_songs)
-
-        # Step 2: Deduplicate
-        logger.info("")
-        logger.info("Step 2: Deduplicating")
-        unique_songs = list(dict.fromkeys(all_songs))
         summary["songs_unique"] = len(unique_songs)
-        logger.info(f"  {len(all_songs)} scraped -> {len(unique_songs)} unique songs")
 
         if not unique_songs:
             logger.warning("No songs found from any source!")
@@ -101,7 +110,7 @@ class Orchestrator:
         # Summary
         logger.info("")
         logger.info("=" * 60)
-        logger.info("Run complete!")
+        logger.info("Run complete!" + (" (DRY RUN - no playlists changed)" if self.dry_run else ""))
         logger.info(f"  Songs scraped: {summary['songs_unique']} unique")
         if self.tidal:
             logger.info(
@@ -158,6 +167,10 @@ class Orchestrator:
             f"{summary[unmatched_key]} unmatched"
         )
 
+        if self.dry_run:
+            logger.info(f"  [dry-run] Skipping {service_name} playlist update.")
+            return
+
         # Update playlist (only if we have matches — never clear to empty)
         if track_ids:
             logger.info(f"\nStep 4: Updating {service_name} playlist")
@@ -181,4 +194,9 @@ class Orchestrator:
                 songs.extend(result)
             except Exception as e:
                 logger.error(f"  {scraper.name} scraper failed: {e}", exc_info=True)
+        if not songs:
+            logger.warning(
+                "No songs scraped from any source - the site structure may have "
+                "changed. Inspect with: python -m plan_b scrape --save-html ./debug_html"
+            )
         return songs

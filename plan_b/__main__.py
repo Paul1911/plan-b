@@ -5,6 +5,21 @@ from plan_b.config import Config
 from plan_b.logging_config import setup_logging
 
 
+def _build_fetcher(save_html: str | None, from_html: str | None):
+    """Build the HTTP fetcher for the requested debug mode.
+
+    --from-html replays saved pages (offline); --save-html captures live pages
+    to disk; otherwise a plain live fetcher is used.
+    """
+    from plan_b.fetch import FixtureFetcher, LiveFetcher, SavingFetcher
+
+    if from_html:
+        return FixtureFetcher(from_html)
+    if save_html:
+        return SavingFetcher(LiveFetcher(), save_html)
+    return None  # Orchestrator/scraper will default to LiveFetcher
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="plan_b",
@@ -15,12 +30,6 @@ def main():
     # 'run' command
     run_parser = subparsers.add_parser("run", help="Run the full pipeline once")
     run_parser.add_argument(
-        "--tidal",
-        action="store_true",
-        default=True,
-        help="Update Tidal playlist (default: on)",
-    )
-    run_parser.add_argument(
         "--no-tidal",
         action="store_true",
         help="Disable Tidal playlist update",
@@ -29,6 +38,41 @@ def main():
         "--spotify",
         action="store_true",
         help="Also update Spotify playlist",
+    )
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Scrape and match but do not modify any playlist",
+    )
+    run_parser.add_argument(
+        "--save-html",
+        metavar="DIR",
+        help="Save fetched pages to DIR (for building fixtures / debugging)",
+    )
+    run_parser.add_argument(
+        "--from-html",
+        metavar="DIR",
+        help="Replay pages from DIR instead of the network (offline)",
+    )
+
+    # 'scrape' command - scrapers only, no credentials needed
+    scrape_parser = subparsers.add_parser(
+        "scrape", help="Scrape and print songs only (no matching, no credentials)"
+    )
+    scrape_parser.add_argument(
+        "--save-html",
+        metavar="DIR",
+        help="Save fetched pages to DIR (for building fixtures / debugging)",
+    )
+    scrape_parser.add_argument(
+        "--from-html",
+        metavar="DIR",
+        help="Replay pages from DIR instead of the network (offline)",
+    )
+
+    # 'login' command - one-time interactive Tidal auth
+    subparsers.add_parser(
+        "login", help="Authenticate with Tidal once and save the session file"
     )
 
     # 'schedule' command
@@ -46,12 +90,6 @@ def main():
         help="Weekdays to run on (default: tuesday wednesday thursday friday)",
     )
     sched_parser.add_argument(
-        "--tidal",
-        action="store_true",
-        default=True,
-        help="Update Tidal playlist (default: on)",
-    )
-    sched_parser.add_argument(
         "--no-tidal",
         action="store_true",
         help="Disable Tidal playlist update",
@@ -60,6 +98,11 @@ def main():
         "--spotify",
         action="store_true",
         help="Also update Spotify playlist",
+    )
+    sched_parser.add_argument(
+        "--run-now",
+        action="store_true",
+        help="Also run once immediately on startup (default: wait for schedule)",
     )
 
     args = parser.parse_args()
@@ -82,26 +125,52 @@ def main():
             print("\nSee .env.example for setup instructions.")
             sys.exit(1)
 
-    if args.command == "run":
+    if args.command == "scrape":
         from plan_b.orchestrator import Orchestrator
 
-        orchestrator = Orchestrator(enable_tidal=enable_tidal, enable_spotify=enable_spotify)
+        fetcher = _build_fetcher(args.save_html, args.from_html)
+        orchestrator = Orchestrator(
+            enable_tidal=False, enable_spotify=False, fetcher=fetcher
+        )
+        _, unique = orchestrator.collect_songs()
+        print(f"\n{len(unique)} unique songs scraped:")
+        for song in unique:
+            played = song.played_at.strftime("%a %H:%M") if song.played_at else "??"
+            print(f"  [{played}] {song.artist} - {song.title}  ({song.source})")
+
+    elif args.command == "login":
+        from plan_b.services.tidal import TidalService
+
+        print("Starting Tidal login...")
+        TidalService()  # triggers interactive OAuth and saves the session file
+        print(f"\nTidal session saved to {Config.TIDAL_SESSION_FILE}")
+
+    elif args.command == "run":
+        from plan_b.orchestrator import Orchestrator
+
+        fetcher = _build_fetcher(args.save_html, args.from_html)
+        orchestrator = Orchestrator(
+            enable_tidal=enable_tidal,
+            enable_spotify=enable_spotify,
+            dry_run=args.dry_run,
+            fetcher=fetcher,
+        )
         summary = orchestrator.run()
 
-        print(f"\nDone!")
+        print("\nDone!" + (" (dry run)" if args.dry_run else ""))
         print(f"  Songs found:   {summary['songs_scraped']} (scraped), {summary['songs_unique']} unique")
         if enable_tidal:
             print(
-                f"  Tidal:         {summary['tidal_matched']} added to playlist, "
+                f"  Tidal:         {summary['tidal_matched']} matched, "
                 f"{summary['tidal_unmatched']} not found"
             )
         if enable_spotify:
             print(
-                f"  Spotify:       {summary['spotify_matched']} added to playlist, "
+                f"  Spotify:       {summary['spotify_matched']} matched, "
                 f"{summary['spotify_unmatched']} not found"
             )
         if summary["unmatched_songs"]:
-            print(f"\n  Songs not found on streaming services:")
+            print("\n  Songs not found on streaming services:")
             for s in summary["unmatched_songs"]:
                 print(f"    - {s}")
 
@@ -113,6 +182,7 @@ def main():
             days=args.days,
             enable_tidal=enable_tidal,
             enable_spotify=enable_spotify,
+            run_on_start=args.run_now,
         )
 
 

@@ -1,7 +1,8 @@
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-tidalapi>=0.7.0
+tidalapi>=0.8.0,<0.9.0
 spotipy>=2.23.0
 thefuzz[speedup]>=0.20.0
 python-dotenv>=1.0.0
 schedule>=1.2.0
+tzdata>=2024.1

@@ -1,8 +1,11 @@
 import json
 import logging
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import tidalapi
 
@@ -22,25 +25,28 @@ class TidalService:
         self._login()
 
     def _login(self):
-        """Load saved session or initiate new OAuth login."""
-        session_file = Path(Config.TIDAL_SESSION_FILE)
+        """Establish a Tidal session: saved/refresh token first, OAuth as last resort.
 
-        if session_file.exists():
-            try:
-                data = json.loads(session_file.read_text(encoding="utf-8"))
-                self.session.load_oauth_session(
-                    data["token_type"],
-                    data["access_token"],
-                    data.get("refresh_token"),
-                    data.get("expiry_time"),
-                )
-                if self.session.check_login():
-                    logger.info("Tidal session restored from file")
-                    return
-            except Exception as e:
-                logger.warning(f"Saved Tidal session invalid: {e}")
+        1. Load session data from TIDAL_SESSION_JSON (e.g. a GitHub Actions secret)
+           or the on-disk session file.
+        2. Try the stored access token; if it's expired, mint a fresh one with the
+           refresh token (which Tidal does not rotate, so this keeps working).
+        3. Fall back to interactive OAuth - but only in a real terminal. In CI we
+           raise instead of hanging forever on input.
+        """
+        data = self._load_session_data()
+        if data and self._restore_from_data(data):
+            return
 
-        # Interactive OAuth login
+        if os.getenv("CI") or not sys.stdin.isatty():
+            raise RuntimeError(
+                "No usable Tidal session and not running interactively. "
+                "Run 'python -m plan_b login' locally, then supply the resulting "
+                "session via the TIDAL_SESSION_JSON secret (GitHub Actions) or the "
+                f"{Config.TIDAL_SESSION_FILE} file."
+            )
+
+        # Interactive OAuth login (first-time, local only)
         login, future = self.session.login_oauth()
         print(
             f"\n{'=' * 60}\n"
@@ -54,6 +60,68 @@ class TidalService:
         print("  Tidal login successful!\n")
         self._save_session()
         logger.info("Tidal login successful, session saved")
+
+    def _load_session_data(self) -> Optional[dict]:
+        """Load session JSON from the env var (CI) or the session file."""
+        raw = Config.TIDAL_SESSION_JSON
+        if raw:
+            try:
+                logger.info("Loading Tidal session from TIDAL_SESSION_JSON")
+                return json.loads(raw)
+            except Exception as e:
+                logger.warning(f"TIDAL_SESSION_JSON is set but not valid JSON: {e}")
+
+        session_file = Path(Config.TIDAL_SESSION_FILE)
+        if session_file.exists():
+            try:
+                return json.loads(session_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning(f"Saved Tidal session file invalid: {e}")
+        return None
+
+    def _restore_from_data(self, data: dict) -> bool:
+        """Restore a session from saved token data, refreshing the access token if needed.
+
+        tidalapi's load_oauth_session() calls the API to initialise the session, so it
+        only works with a *valid* access token. When the stored one has expired we must
+        refresh first, then initialise with the fresh token.
+        """
+        token_type = data.get("token_type") or "Bearer"
+        access_token = data.get("access_token")
+        refresh_token = data.get("refresh_token")
+        expiry_raw = data.get("expiry_time")
+        expiry = datetime.fromisoformat(expiry_raw) if expiry_raw else None
+
+        # Fast path: the stored access token may still be valid.
+        if access_token:
+            try:
+                self.session.load_oauth_session(
+                    token_type, access_token, refresh_token, expiry
+                )
+                if self.session.check_login():
+                    logger.info("Tidal session restored from saved token")
+                    self._save_session()
+                    return True
+            except Exception as e:
+                logger.info(f"Stored Tidal access token unusable, refreshing: {e}")
+
+        # Refresh path: mint a fresh access token, then initialise the session.
+        if refresh_token and self.session.token_refresh(refresh_token):
+            try:
+                self.session.load_oauth_session(
+                    token_type,
+                    self.session.access_token,
+                    refresh_token,
+                    self.session.expiry_time,
+                )
+                if self.session.check_login():
+                    logger.info("Tidal session refreshed via refresh token")
+                    self._save_session()
+                    return True
+            except Exception as e:
+                logger.warning(f"Tidal refresh succeeded but session init failed: {e}")
+
+        return False
 
     def _save_session(self):
         """Persist session tokens to file for reuse."""
@@ -99,43 +167,47 @@ class TidalService:
         return self.matcher.best_match(song, candidates)
 
     def find_or_create_playlist(self) -> PlaylistInfo:
-        """Find existing 'Plan B' playlist or create a new one.
+        """Reuse the existing 'Plan B' playlist, or create it once.
+
+        We keep the *same* playlist across runs (and just replace its contents in
+        update_playlist) so its share URL stays stable. The old code deleted and
+        recreated it every run, which changed the ID/link each time.
 
         Stores the UserPlaylist object internally for later modification.
         """
-        # Search user's playlists for an existing one to delete+recreate
+        self._user_playlist = None
         try:
-            playlists = self.session.user.playlists()
-            for pl in playlists:
+            for pl in self.session.user.playlists():
                 if pl.name == Config.PLAYLIST_NAME:
-                    logger.info(f"Found existing Tidal playlist: {pl.id}, will recreate")
-                    # Delete the old playlist so we can create a fresh UserPlaylist
-                    try:
-                        pl.delete()
-                        logger.info("Deleted old Tidal playlist")
-                    except Exception as e:
-                        logger.warning(f"Failed to delete old playlist: {e}")
+                    logger.info(f"Reusing existing Tidal playlist: {pl.id}")
+                    self._user_playlist = pl
                     break
         except Exception as e:
             logger.error(f"Failed to list Tidal playlists: {e}")
 
-        # Create new playlist (returns a UserPlaylist with write methods)
-        logger.info(f"Creating Tidal playlist: {Config.PLAYLIST_NAME}")
-        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
-        description = f"{Config.PLAYLIST_DESCRIPTION} Letztes Update: {timestamp}"
-        self._user_playlist = self.session.user.create_playlist(
-            Config.PLAYLIST_NAME, description
+        if self._user_playlist is None:
+            logger.info(f"Creating Tidal playlist: {Config.PLAYLIST_NAME}")
+            self._user_playlist = self.session.user.create_playlist(
+                Config.PLAYLIST_NAME, Config.PLAYLIST_DESCRIPTION
+            )
+
+        url = getattr(self._user_playlist, "share_url", None) or (
+            f"https://tidal.com/browse/playlist/{self._user_playlist.id}"
         )
         return PlaylistInfo(
             service_name="tidal",
             playlist_id=str(self._user_playlist.id),
-            playlist_url=f"https://tidal.com/browse/playlist/{self._user_playlist.id}",
+            playlist_url=url,
             name=self._user_playlist.name,
-            track_count=0,
+            track_count=self._user_playlist.num_tracks,
         )
 
     def update_playlist(self, playlist: PlaylistInfo, track_ids: list[str]) -> None:
-        """Add tracks to the playlist using the stored UserPlaylist object."""
+        """Replace the playlist contents with the given track IDs.
+
+        Clears the existing tracks first so the playlist mirrors the latest show
+        (rather than growing without bound), then re-adds in batches.
+        """
         if not track_ids:
             logger.warning("No tracks to add to Tidal playlist")
             return
@@ -147,12 +219,24 @@ class TidalService:
         track_ids = track_ids[: Config.MAX_PLAYLIST_TRACKS]
 
         try:
+            # Wipe existing contents so we mirror only the latest show.
+            self._user_playlist.clear()
+            logger.info("Cleared existing Tidal playlist contents")
+
             # Add in batches to avoid potential API limits
             batch_size = 50
             for i in range(0, len(track_ids), batch_size):
                 batch = [int(tid) for tid in track_ids[i : i + batch_size]]
                 self._user_playlist.add(batch)
                 logger.info(f"Added batch of {len(batch)} tracks to Tidal")
+
+            # Refresh the description timestamp (best effort).
+            timestamp = datetime.now(ZoneInfo(Config.TIMEZONE)).strftime("%d.%m.%Y %H:%M")
+            description = f"{Config.PLAYLIST_DESCRIPTION} Letztes Update: {timestamp}"
+            try:
+                self._user_playlist.edit(description=description)
+            except Exception as e:
+                logger.warning(f"Could not update playlist description: {e}")
 
             logger.info(f"Tidal playlist updated with {len(track_ids)} tracks")
 

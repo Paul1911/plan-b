@@ -1,11 +1,12 @@
 import logging
 import re
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-import requests
 from bs4 import BeautifulSoup
 
 from plan_b.config import Config
+from plan_b.fetch import LiveFetcher
 from plan_b.models import Song
 from plan_b.scrapers.base import BaseScraper
 
@@ -15,32 +16,27 @@ logger = logging.getLogger(__name__)
 class OnlineRadioBoxScraper(BaseScraper):
     """
     Scrapes the 1LIVE playlist from OnlineRadioBox and filters to the
-    Plan B time window (Mon-Thu 20:00-23:00).
+    Plan B time window (Mon-Thu 20:00-23:00, Europe/Berlin).
 
     OnlineRadioBox stores playlists for the past 7 days.
     URL pattern: /de/einslive/playlist/{day_offset} where 0=today, 1=yesterday, etc.
+
+    Fetching is delegated to a pluggable fetcher so the parsing can be tested
+    and debugged offline (see plan_b.fetch).
     """
 
     name = "onlineradiobox"
 
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-            }
-        )
+    def __init__(self, fetcher=None):
+        self.fetcher = fetcher or LiveFetcher()
+        self.tz = ZoneInfo(Config.TIMEZONE)
 
     def scrape(self) -> list[Song]:
         """Scrape Plan B songs from the most recent show only."""
+        now = datetime.now(self.tz)
         # Find the most recent day that was a Plan B show (Mon-Thu)
         for day_offset in range(7):
-            target_date = datetime.now() - timedelta(days=day_offset)
+            target_date = now - timedelta(days=day_offset)
             if target_date.weekday() not in Config.PLAN_B_WEEKDAYS:
                 continue
 
@@ -59,13 +55,12 @@ class OnlineRadioBoxScraper(BaseScraper):
         params = {"cs": "de.einslive"}
 
         try:
-            response = self.session.get(url, params=params, timeout=15)
-            response.raise_for_status()
-        except requests.RequestException as e:
+            html = self.fetcher.get(url, params=params)
+        except Exception as e:
             logger.warning(f"OnlineRadioBox fetch failed for day offset {day_offset}: {e}")
             return []
 
-        songs = self._parse_html(response.text, target_date)
+        songs = self._parse_html(html, target_date)
         day_name = target_date.strftime("%A %Y-%m-%d")
         logger.info(f"OnlineRadioBox {day_name}: {len(songs)} songs in Plan B window")
         return songs
@@ -149,7 +144,7 @@ class OnlineRadioBoxScraper(BaseScraper):
 
     def _parse_artist_title(self, text: str) -> Song | None:
         """Parse 'Artist - Title' text into a Song."""
-        for sep in [" - ", " \u2013 ", " \u2014 "]:
+        for sep in [" - ", " – ", " — "]:
             if sep in text:
                 parts = text.split(sep, 1)
                 artist = parts[0].strip()
